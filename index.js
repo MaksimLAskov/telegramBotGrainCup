@@ -2,8 +2,9 @@ const telegramApi = require('node-telegram-bot-api');
 const moment = require('moment-timezone');
 const cron = require('node-cron');
 const axios = require('axios');
+const fs = require('fs');
 
-const token = "7618603457:AAFFM4XYXrflVRu2bisIiC-05CHiLYgF";
+const token = "7618603457:AAFFM4XYXrflVRu2bisIiC-05CHiLYgFsFM";
 const bot = new telegramApi(token, { polling: true });
 
 const adminUserId = 777488290; // Замените на ID админа
@@ -17,17 +18,41 @@ const employees = {
 let questionnaireData = {};
 let userChatId = null; // Позиция для хранения ID пользователя, который отправил анкету
 let waitingMessageId = null; // Позиция для хранения ID сообщения о рассмотрении анкеты
-
-bot.on('message', (msg) => {
-    console.log(msg);
-});
+let isQuestionnaireActive = false; // Флаг для отслеживания активной анкеты
 
 const googleScriptUrlExpenses = 'https://script.google.com/macros/s/AKfycbwTw5VTpVYDbU1wkuTXCXYbFVzVtJRrHfRtJiyszILPgwHS-jtEzCjcN2IDGx2gv4c1/exec'; // Для расходников
 const googleScriptUrlShift = 'https://script.google.com/macros/s/AKfycbwTw5VTpVYDbU1wkuTXCXYbFVzVtJRrHfRtJiyszILPgwHS-jtEzCjcN2IDGx2gv4c1/exec'; // Для смен
 
+// Логирование
+const logFile = 'bot.log';
+
+function log(message) {
+    const timestamp = moment().tz('Europe/Moscow').format('YYYY-MM-DD HH:mm:ss');
+    const logMessage = `[${timestamp}] ${message}\n`;
+    fs.appendFileSync(logFile, logMessage, 'utf8');
+}
+
+// Проверка ввода числа
+function validateNumberInput(input) {
+    const number = parseFloat(input);
+    if (isNaN(number) || number < 0) {
+        throw new Error('Некорректное число. Введите положительное число.');
+    }
+    return number;
+}
+
+// Проверка длины текста
+function validateTextInput(input, maxLength) {
+    if (input.length > maxLength) {
+        throw new Error(`Текст слишком длинный. Максимум ${maxLength} символов.`);
+    }
+    return input;
+}
+
 // Настройка ежедневной отправки сообщения
 cron.schedule('50 19 * * *', () => {
-    console.log('Задача сработала в', moment().tz('Europe/Moscow').format('YYYY-MM-DD HH:mm:ss'));
+    const time = moment().tz('Europe/Moscow').format('YYYY-MM-DD HH:mm:ss');
+    log(`Задача сработала в ${time}`);
     bot.sendMessage(adminUserId, 'Кто сегодня на смене?', {
         reply_markup: {
             inline_keyboard: [
@@ -36,7 +61,9 @@ cron.schedule('50 19 * * *', () => {
                 [{ text: 'Дмитрий', callback_data: 'employee_Дмитрий' }],
             ],
         },
-    }).catch(console.error);
+    }).catch((error) => {
+        log(`Ошибка при отправке сообщения: ${error.message}`);
+    });
 }, {
     timezone: 'Europe/Moscow',
 });
@@ -55,7 +82,9 @@ bot.on('callback_query', (query) => {
                 .then(() => {
                     bot.sendMessage(adminUserId, `Сообщение отправлено ${employeeName}.`);
                 })
-                .catch(console.error);
+                .catch((error) => {
+                    log(`Ошибка при отправке сообщения сотруднику ${employeeName}: ${error.message}`);
+                });
         } else {
             bot.sendMessage(adminUserId, `Ошибка: ID для ${employeeName} не найден.`);
         }
@@ -89,6 +118,11 @@ bot.onText(/\/start/, (msg) => {
 // Обработка кнопки "смена"
 bot.onText(/смена/, (msg) => {
     const chatId = msg.chat.id;
+    if (isQuestionnaireActive) {
+        bot.sendMessage(chatId, 'Анкета уже заполняется. Завершите текущую анкету.');
+        return;
+    }
+    isQuestionnaireActive = true;
     userChatId = chatId; // Сохраняем ID пользователя
     questionnaireData = { type: 'смена' };
     bot.sendMessage(chatId, 'Выберите дату:', {
@@ -103,6 +137,11 @@ bot.onText(/смена/, (msg) => {
 // Обработка кнопки "расходники"
 bot.onText(/расходники/, (msg) => {
     const chatId = msg.chat.id;
+    if (isQuestionnaireActive) {
+        bot.sendMessage(chatId, 'Анкета уже заполняется. Завершите текущую анкету.');
+        return;
+    }
+    isQuestionnaireActive = true;
     userChatId = chatId; // Сохраняем ID пользователя
     questionnaireData = { type: 'расходники' };
     bot.sendMessage(chatId, 'Выберите дату:', {
@@ -133,12 +172,20 @@ function handleDateSelection(chatId, data) {
 function proceedToNameInput(chatId) {
     bot.sendMessage(chatId, 'Введите ФИО сменщика:');
     bot.once('message', (msg) => {
-        questionnaireData.name = msg.text;
-        bot.sendMessage(chatId, 'Введите сумму выручки:');
-        bot.once('message', (msg) => {
-            questionnaireData.cash = msg.text;
-            askForConfirmation(chatId);
-        });
+        try {
+            questionnaireData.name = validateTextInput(msg.text, 100); // Максимум 100 символов
+            bot.sendMessage(chatId, 'Введите сумму выручки:');
+            bot.once('message', (msg) => {
+                try {
+                    questionnaireData.cash = validateNumberInput(msg.text);
+                    askForConfirmation(chatId);
+                } catch (error) {
+                    bot.sendMessage(chatId, error.message);
+                }
+            });
+        } catch (error) {
+            bot.sendMessage(chatId, error.message);
+        }
     });
 }
 
@@ -146,21 +193,37 @@ function proceedToNameInput(chatId) {
 function proceedToSellerInput(chatId) {
     bot.sendMessage(chatId, 'Введите имя продавца:');
     bot.once('message', (msg) => {
-        questionnaireData.seller = msg.text;
-        bot.sendMessage(chatId, 'Введите комментарий:');
-        bot.once('message', (msg) => {
-            questionnaireData.comment = msg.text;
-            bot.sendMessage(chatId, 'Введите количество:');
+        try {
+            questionnaireData.seller = validateTextInput(msg.text, 100); // Максимум 100 символов
+            bot.sendMessage(chatId, 'Введите комментарий:');
             bot.once('message', (msg) => {
-                questionnaireData.quantity = parseFloat(msg.text);
-                bot.sendMessage(chatId, 'Введите цену за штуку:');
-                bot.once('message', (msg) => {
-                    questionnaireData.pricePerUnit = parseFloat(msg.text);
-                    questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
-                    askForConfirmation(chatId);
-                });
+                try {
+                    questionnaireData.comment = validateTextInput(msg.text, 200); // Максимум 200 символов
+                    bot.sendMessage(chatId, 'Введите количество:');
+                    bot.once('message', (msg) => {
+                        try {
+                            questionnaireData.quantity = validateNumberInput(msg.text);
+                            bot.sendMessage(chatId, 'Введите цену за штуку:');
+                            bot.once('message', (msg) => {
+                                try {
+                                    questionnaireData.pricePerUnit = validateNumberInput(msg.text);
+                                    questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
+                                    askForConfirmation(chatId);
+                                } catch (error) {
+                                    bot.sendMessage(chatId, error.message);
+                                }
+                            });
+                        } catch (error) {
+                            bot.sendMessage(chatId, error.message);
+                        }
+                    });
+                } catch (error) {
+                    bot.sendMessage(chatId, error.message);
+                }
             });
-        });
+        } catch (error) {
+            bot.sendMessage(chatId, error.message);
+        }
     });
 }
 
@@ -186,6 +249,7 @@ function askForConfirmation(chatId) {
 // Функция для отмены анкеты
 function cancelQuestionnaire(chatId) {
     questionnaireData = {}; // Очищаем данные анкеты
+    isQuestionnaireActive = false;
     bot.sendMessage(chatId, 'Анкета отменена. Вы можете начать заново, выбрав команду /start.');
 }
 
@@ -241,36 +305,36 @@ function modifyData(chatId, field) {
 
     bot.sendMessage(chatId, promptMessage);
     bot.once('message', (msg) => {
-        // Обновляем соответствующее поле в анкете
-        switch (field) {
-            case 'date':
-                questionnaireData.date = msg.text;
-                break;
-            case 'name':
-                questionnaireData.name = msg.text;
-                break;
-            case 'cash':
-                questionnaireData.cash = msg.text;
-                break;
-            case 'seller':
-                questionnaireData.seller = msg.text;
-                break;
-            case 'comment':
-                questionnaireData.comment = msg.text;
-                break;
-            case 'quantity':
-                questionnaireData.quantity = parseFloat(msg.text);
-                // Пересчитываем общую сумму, если изменяется количество
-                questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
-                break;
-            case 'pricePerUnit':
-                questionnaireData.pricePerUnit = parseFloat(msg.text);
-                // Пересчитываем общую сумму, если изменяется цена за штуку
-                questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
-                break;
+        try {
+            switch (field) {
+                case 'date':
+                    questionnaireData.date = validateTextInput(msg.text, 20);
+                    break;
+                case 'name':
+                    questionnaireData.name = validateTextInput(msg.text, 100);
+                    break;
+                case 'cash':
+                    questionnaireData.cash = validateNumberInput(msg.text);
+                    break;
+                case 'seller':
+                    questionnaireData.seller = validateTextInput(msg.text, 100);
+                    break;
+                case 'comment':
+                    questionnaireData.comment = validateTextInput(msg.text, 200);
+                    break;
+                case 'quantity':
+                    questionnaireData.quantity = validateNumberInput(msg.text);
+                    questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
+                    break;
+                case 'pricePerUnit':
+                    questionnaireData.pricePerUnit = validateNumberInput(msg.text);
+                    questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
+                    break;
+            }
+            askForConfirmation(chatId);
+        } catch (error) {
+            bot.sendMessage(chatId, error.message);
         }
-        // После изменения данных, повторно предлагается подтверждение
-        askForConfirmation(chatId);
     });
 }
 
@@ -314,6 +378,7 @@ function handleApproval(query, data) {
                 if (userChatId) {
                     bot.sendMessage(userChatId, 'Ваша анкета подтверждена.');
                 }
+                isQuestionnaireActive = false; // Сбрасываем флаг
             })
             .catch((error) => {
                 console.error('Ошибка при отправке данных:', error);
@@ -330,6 +395,7 @@ function handleApproval(query, data) {
         if (userChatId) {
             bot.sendMessage(userChatId, 'Ваша анкета не подтверждена. Пожалуйста, заполните анкету снова.');
         }
+        isQuestionnaireActive = false; // Сбрасываем флаг
     }
 }
 
@@ -371,9 +437,25 @@ async function sendToGoogleSheets(data) {
             },
         });
 
+        if (response.status !== 200) {
+            throw new Error(`Ошибка при отправке данных: ${response.statusText}`);
+        }
+
         console.log('Данные успешно отправлены:', response.data);
+        return response.data;
     } catch (error) {
         console.error('Ошибка при отправке данных:', error.message);
-        throw error; // Пробрасываем ошибку для обработки в вызывающем коде
+        throw new Error(`Ошибка при отправке данных: ${error.message}`);
     }
 }
+
+// Обработка завершения работы
+process.on('SIGINT', () => {
+    bot.sendMessage(adminUserId, 'Бот завершает работу.');
+    process.exit();
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('Необработанная ошибка:', error);
+    bot.sendMessage(adminUserId, `Произошла критическая ошибка: ${error.message}`);
+});
