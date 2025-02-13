@@ -3,7 +3,7 @@ const moment = require('moment-timezone');
 const cron = require('node-cron');
 const axios = require('axios');
 
-const token = "7618603457:AAFFM4XYXrflVRu2bisIiC-05CHiLYgFsFM";
+const token = "7732340181:AAGOT7yAS6oedclmq_l7PA7bNAW8pLvr0C8";
 const bot = new telegramApi(token, { polling: true });
 
 const adminUserId = 777488290; // Замените на ID админа
@@ -16,6 +16,10 @@ const employees = {
 let questionnaireData = {};
 let userChatId = null; // Позиция для хранения ID пользователя, который отправил анкету
 let waitingMessageId = null; // Позиция для хранения ID сообщения о рассмотрении анкеты
+
+bot.on('message', (msg) => {
+    console.log(msg);
+});
 
 const googleScriptUrlExpenses = 'https://script.google.com/macros/s/AKfycbwTw5VTpVYDbU1wkuTXCXYbFVzVtJRrHfRtJiyszILPgwHS-jtEzCjcN2IDGx2gv4c1/exec'; // Для расходников
 const googleScriptUrlShift = 'https://script.google.com/macros/s/AKfycbwTw5VTpVYDbU1wkuTXCXYbFVzVtJRrHfRtJiyszILPgwHS-jtEzCjcN2IDGx2gv4c1/exec'; // Для смен
@@ -116,7 +120,7 @@ function handleDateSelection(chatId, data) {
     } else if (data === 'date_yesterday') {
         questionnaireData.date = moment().tz('Europe/Moscow').subtract(1, 'days').format('DD.MM.YYYY'); // Формат даты
     }
-    
+
     if (questionnaireData.type === 'смена') {
         proceedToNameInput(chatId);
     } else if (questionnaireData.type === 'расходники') {
@@ -191,14 +195,14 @@ function askForModification(chatId) {
         [{ text: 'ФИО сменщика', callback_data: 'modify_name' }],
         [{ text: 'Выручка', callback_data: 'modify_cash' }]
     ];
-    
+
     if (questionnaireData.type === 'расходники') {
         keyboard.push([{ text: 'Имя продавца', callback_data: 'modify_seller' }]);
         keyboard.push([{ text: 'Комментарий', callback_data: 'modify_comment' }]);
         keyboard.push([{ text: 'Количество', callback_data: 'modify_quantity' }]);
         keyboard.push([{ text: 'Цена за штуку', callback_data: 'modify_pricePerUnit' }]);
     }
-    
+
     bot.sendMessage(chatId, 'Выберите поле для изменения:', {
         reply_markup: {
             inline_keyboard: keyboard
@@ -255,10 +259,13 @@ function modifyData(chatId, field) {
                 break;
             case 'quantity':
                 questionnaireData.quantity = parseFloat(msg.text);
+                // Пересчитываем общую сумму, если изменяется количество
+                questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
                 break;
             case 'pricePerUnit':
                 questionnaireData.pricePerUnit = parseFloat(msg.text);
-                questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit; // Обновляем общую сумму
+                // Пересчитываем общую сумму, если изменяется цена за штуку
+                questionnaireData.totalAmount = questionnaireData.quantity * questionnaireData.pricePerUnit;
                 break;
         }
         // После изменения данных, повторно предлагается подтверждение
@@ -356,13 +363,13 @@ async function sendToGoogleSheets(data) {
 
         console.log('Отправляемые данные:', payload.toString());
         console.log('Отправка данных на URL:', url);
-        
+
         const response = await axios.post(url, payload.toString(), {
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
             },
         });
-        
+
         console.log('Данные успешно отправлены:', response.data);
     } catch (error) {
         console.error('Ошибка при отправке данных:', error.message);
