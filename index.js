@@ -3,7 +3,7 @@ const moment = require('moment-timezone');
 const cron = require('node-cron');
 const axios = require('axios');
 
-const token = "7732340181:AAGOT7yAS6oedclmq_l7PA7bNAW8pLvr0C8";
+const token = "7618603457:AAFFM4XYXrflVRu2bisIiC-05CHiLYgF";
 const bot = new telegramApi(token, { polling: true });
 
 const adminUserId = 777488290; // Замените на ID админа
